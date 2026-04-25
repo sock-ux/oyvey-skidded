@@ -1,1 +1,345 @@
+import java.util.*;
 
+public class BlockESP {
+
+    // ── Block ────────────────────────────────────────────────────────────────
+    static class Block {
+        int id;
+        String label;
+        boolean active;
+
+        Block(int id, String label) {
+            this.id = id;
+            this.label = label;
+            this.active = true;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("[%d:%s]", id, label);
+        }
+    }
+
+    // ── Tracer ───────────────────────────────────────────────────────────────
+    static class Tracer {
+        String name;
+        List<Integer> history = new ArrayList<>();
+        int hits = 0;
+        int rounds = 0;
+
+        Tracer(String name) { this.name = name; }
+
+        void record(int guessed, int target) {
+            rounds++;
+            history.add(guessed);
+            if (guessed == target) hits++;
+        }
+
+        double accuracy() {
+            return rounds == 0 ? 0.0 : hits * 100.0 / rounds;
+        }
+
+        String summary() {
+            return String.format("%-14s │ %3d hits / %3d rounds │ %5.1f%% accuracy",
+                    name, hits, rounds, accuracy());
+        }
+    }
+
+    // ── Game State ───────────────────────────────────────────────────────────
+    static List<Block> blocks = new ArrayList<>();
+    static Map<Integer, Block> blockMap = new LinkedHashMap<>();
+    static List<Tracer> tracers = new ArrayList<>();
+    static Tracer activeTracer = null;
+    static int nextId = 1;
+    static Random rng = new Random();
+    static Scanner sc = new Scanner(System.in);
+
+    // ── Entry Point ──────────────────────────────────────────────────────────
+    public static void main(String[] args) {
+        for (int i = 1; i <= 16; i++) addBlock("B" + i);
+
+        banner();
+        help();
+
+        while (true) {
+            System.out.print("\n> ");
+            String line = sc.nextLine().trim();
+            if (line.isEmpty()) continue;
+            String[] parts = line.split("\\s+", 3);
+            String cmd = parts[0].toLowerCase();
+
+            switch (cmd) {
+                case "guess":   cmdGuess(parts);   break;
+                case "add":     cmdAdd(parts);      break;
+                case "remove":  cmdRemove(parts);   break;
+                case "list":    cmdList();          break;
+                case "tracer":  cmdTracer(parts);   break;
+                case "tracers": cmdTracers();       break;
+                case "use":     cmdUse(parts);      break;
+                case "stats":   cmdStats();         break;
+                case "reset":   cmdReset();         break;
+                case "help":    help();             break;
+                case "quit":
+                case "exit":
+                    System.out.println("Goodbye!"); return;
+                default:
+                    System.out.println("  Unknown command. Type 'help'.");
+            }
+        }
+    }
+
+    // ── Commands ─────────────────────────────────────────────────────────────
+
+    static void cmdGuess(String[] parts) {
+        List<Block> active = activeBlocks();
+        if (active.isEmpty()) { System.out.println("  No active blocks! Add some first."); return; }
+
+        int guessId = -1;
+        if (parts.length >= 2) {
+            try { guessId = Integer.parseInt(parts[1]); } catch (NumberFormatException ignored) {}
+        }
+
+        if (guessId == -1 || !blockMap.containsKey(guessId) || !blockMap.get(guessId).active) {
+            System.out.println("  Usage: guess <block-id>");
+            System.out.println("  Active block IDs: " + activeIdList());
+            return;
+        }
+
+        Block target = active.get(rng.nextInt(active.size()));
+        Block guessed = blockMap.get(guessId);
+        boolean hit = guessId == target.id;
+
+        if (activeTracer != null) activeTracer.record(guessId, target.id);
+
+        System.out.println();
+        printGrid(guessId, target.id);
+
+        if (hit) {
+            System.out.println("  ✓  CORRECT! Block " + target + " lit up!");
+        } else {
+            System.out.println("  ✗  Wrong.  You guessed " + guessed + "  |  Target was " + target);
+        }
+
+        if (activeTracer != null) {
+            System.out.printf("  Tracer [%s]: %d/%d  (%.1f%%)%n",
+                    activeTracer.name, activeTracer.hits, activeTracer.rounds, activeTracer.accuracy());
+        }
+    }
+
+    static void cmdAdd(String[] parts) {
+        String label = parts.length >= 2 ? parts[1] : ("B" + nextId);
+        addBlock(label);
+        System.out.printf("  Added block %d (%s). Total active: %d%n",
+                nextId - 1, label, activeBlocks().size());
+    }
+
+    static void cmdRemove(String[] parts) {
+        if (parts.length < 2) { System.out.println("  Usage: remove <block-id>"); return; }
+        try {
+            int id = Integer.parseInt(parts[1]);
+            Block b = blockMap.get(id);
+            if (b == null) { System.out.println("  Block " + id + " not found."); return; }
+            if (!b.active) { System.out.println("  Block " + id + " is already removed."); return; }
+            b.active = false;
+            blocks.remove(b);
+            System.out.printf("  Removed block %d (%s). Active blocks: %d%n",
+                    id, b.label, activeBlocks().size());
+        } catch (NumberFormatException e) {
+            System.out.println("  Usage: remove <block-id>");
+        }
+    }
+
+    static void cmdList() {
+        List<Block> active = activeBlocks();
+        if (active.isEmpty()) { System.out.println("  No blocks. Use 'add' to create some."); return; }
+        System.out.println("  Active blocks (" + active.size() + "):");
+        int col = 0;
+        for (Block b : active) {
+            System.out.printf("  %-14s", b);
+            if (++col % 5 == 0) System.out.println();
+        }
+        if (col % 5 != 0) System.out.println();
+    }
+
+    static void cmdTracer(String[] parts) {
+        if (parts.length < 2) { System.out.println("  Usage: tracer <name>"); return; }
+        String name = parts[1];
+        for (Tracer t : tracers) {
+            if (t.name.equalsIgnoreCase(name)) {
+                activeTracer = t;
+                System.out.println("  Switched to existing tracer '" + name + "'.");
+                return;
+            }
+        }
+        Tracer t = new Tracer(name);
+        tracers.add(t);
+        activeTracer = t;
+        System.out.println("  Tracer '" + name + "' created and set as active.");
+    }
+
+    static void cmdUse(String[] parts) {
+        if (parts.length < 2) {
+            System.out.println("  Usage: use <tracer-name>   or   use none");
+            return;
+        }
+        String name = parts[1];
+        if (name.equalsIgnoreCase("none")) {
+            activeTracer = null;
+            System.out.println("  Tracer cleared. Guesses won't be tracked.");
+            return;
+        }
+        for (Tracer t : tracers) {
+            if (t.name.equalsIgnoreCase(name)) {
+                activeTracer = t;
+                System.out.println("  Active tracer set to '" + t.name + "'.");
+                return;
+            }
+        }
+        System.out.println("  Tracer '" + name + "' not found. Use 'tracers' to list them.");
+    }
+
+    static void cmdTracers() {
+        if (tracers.isEmpty()) { System.out.println("  No tracers. Use 'tracer <name>' to add one."); return; }
+        System.out.println();
+        System.out.println("  Tracer           │ Results               │ Accuracy");
+        System.out.println("  ───────────────────────────────────────────────────────");
+        for (Tracer t : tracers) {
+            String marker = (t == activeTracer) ? "  ◀ active" : "";
+            System.out.println("  " + t.summary() + marker);
+        }
+        int n = activeBlocks().size();
+        if (n > 0)
+            System.out.printf("%n  Chance level with %d blocks: %.2f%%%n", n, 100.0 / n);
+    }
+
+    static void cmdStats() {
+        System.out.println();
+        System.out.println("  ── Block Grid ────────────────────────────────");
+        System.out.println("  Total blocks (ever): " + blockMap.size());
+        System.out.println("  Active blocks      : " + activeBlocks().size());
+        int n = activeBlocks().size();
+        System.out.println("  Chance per guess   : " + (n == 0 ? "n/a" :
+                String.format("%.2f%%", 100.0 / n)));
+        if (activeTracer != null) {
+            System.out.println("  Active tracer      : " + activeTracer.name);
+        }
+        System.out.println();
+        if (!tracers.isEmpty()) cmdTracers();
+    }
+
+    static void cmdReset() {
+        blocks.clear();
+        blockMap.clear();
+        tracers.clear();
+        activeTracer = null;
+        nextId = 1;
+        for (int i = 1; i <= 16; i++) addBlock("B" + i);
+        System.out.println("  Reset to default 16 blocks. All tracers cleared.");
+    }
+
+    // ── Grid Rendering ───────────────────────────────────────────────────────
+
+    static void printGrid(int guessedId, int targetId) {
+        List<Block> active = activeBlocks();
+        int cols = Math.min(8, Math.max(4, (int) Math.ceil(Math.sqrt(active.size()))));
+        int cellW = 8; // fixed cell width
+
+        List<List<Block>> rows = new ArrayList<>();
+        List<Block> row = new ArrayList<>();
+        for (Block b : active) {
+            row.add(b);
+            if (row.size() == cols) { rows.add(new ArrayList<>(row)); row.clear(); }
+        }
+        if (!row.isEmpty()) rows.add(row);
+
+        String h   = "─".repeat(cellW);
+        String top = "  ┌" + h + (("┬" + h).repeat(cols - 1)) + "┐";
+        String mid = "  ├" + h + (("┼" + h).repeat(cols - 1)) + "┤";
+        String bot = "  └" + h + (("┴" + h).repeat(cols - 1)) + "┘";
+
+        System.out.println(top);
+        for (int r = 0; r < rows.size(); r++) {
+            List<Block> rowBlocks = rows.get(r);
+            System.out.print("  │");
+            for (int c = 0; c < cols; c++) {
+                if (c < rowBlocks.size()) {
+                    Block b = rowBlocks.get(c);
+                    String cell;
+                    if (b.id == targetId && b.id == guessedId) cell = "✓ " + b.label;
+                    else if (b.id == targetId)                  cell = "[" + b.label + "]";
+                    else if (b.id == guessedId)                 cell = "(" + b.label + ")";
+                    else                                        cell = b.label;
+                    System.out.print(center(cell, cellW) + "│");
+                } else {
+                    System.out.print(" ".repeat(cellW) + "│");
+                }
+            }
+            System.out.println();
+            if (r < rows.size() - 1) System.out.println(mid);
+        }
+        System.out.println(bot);
+        System.out.println("  Legend: [x] = target   (x) = wrong guess   ✓ = hit");
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    static void addBlock(String label) {
+        Block b = new Block(nextId++, label);
+        blocks.add(b);
+        blockMap.put(b.id, b);
+    }
+
+    static List<Block> activeBlocks() {
+        List<Block> out = new ArrayList<>();
+        for (Block b : blocks) if (b.active) out.add(b);
+        return out;
+    }
+
+    static String activeIdList() {
+        StringBuilder sb = new StringBuilder();
+        for (Block b : activeBlocks()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(b.id);
+        }
+        return sb.toString();
+    }
+
+    static String center(String s, int width) {
+        if (s.length() >= width) return s.substring(0, width);
+        int pad = width - s.length();
+        int left = pad / 2, right = pad - left;
+        return " ".repeat(left) + s + " ".repeat(right);
+    }
+
+    static void banner() {
+        System.out.println("╔══════════════════════════════════════╗");
+        System.out.println("║         BLOCK ESP GAME  v2           ║");
+        System.out.println("║  Add/remove blocks · track tracers   ║");
+        System.out.println("╚══════════════════════════════════════╝");
+    }
+
+    static void help() {
+        System.out.println();
+        System.out.println("  COMMANDS");
+        System.out.println("  ──────────────────────────────────────────────────────");
+        System.out.println("  guess  <id>          Guess which block lights up");
+        System.out.println("  add    [label]       Add a block (optional custom label)");
+        System.out.println("  remove <id>          Remove a block by ID");
+        System.out.println("  list                 Show all active blocks and their IDs");
+        System.out.println("  tracer <name>        Create (or switch to) a named tracer");
+        System.out.println("  use    <name|none>   Switch active tracer, or clear it");
+        System.out.println("  tracers              Show all tracers and their stats");
+        System.out.println("  stats                Show block grid + tracer summary");
+        System.out.println("  reset                Reset to 16 blocks, clear all tracers");
+        System.out.println("  help                 Show this menu");
+        System.out.println("  quit                 Exit");
+        System.out.println();
+        System.out.println("  EXAMPLE SESSION");
+        System.out.println("  tracer morning       → start tracking as 'morning'");
+        System.out.println("  list                 → see block IDs");
+        System.out.println("  guess 4              → pick block 4");
+        System.out.println("  add Crystal          → add a block labelled 'Crystal'");
+        System.out.println("  remove 7             → remove block 7");
+        System.out.println("  tracers              → compare tracer scores");
+    }
+}
